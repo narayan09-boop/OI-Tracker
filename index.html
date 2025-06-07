@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>NIFTY Option Chain</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; max-width: 1100px; background: #f9f9f9; color: #222; }
+    select, input { font-size: 1rem; padding: 5px; margin: 5px 10px 10px 0; }
+    table { border-collapse: collapse; margin-top: 20px; width: 100%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: center; font-size: 0.9rem; }
+    th { background: #2c3e50; color: white; }
+    tbody tr:hover { background-color: #e6f2ff; }
+    .calls { background-color: #dff0d8; }
+    .puts { background-color: #f9d6d5; }
+    .strike { background-color: #fcf8e3; font-weight: bold; }
+    #loading { display: none; font-style: italic; color: #666; }
+    #lastUpdated { margin-top: 10px; font-size: 0.9rem; color: #555; }
+    #underlyingValue { font-weight: bold; color: #27ae60; }
+    #strikeHeader { cursor: pointer; }
+
+    .arrow-up::after {
+      content: " ▲";
+      color: green;
+    }
+    .arrow-down::after {
+      content: " ▼";
+      color: red;
+    }
+
+    .filters {
+      margin-top: 10px;
+    }
+
+    .filters label {
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>NIFTY Option Chain</h1>
+
+  <label for="expirySearch">Search Expiry:</label>
+  <input type="text" id="expirySearch" placeholder="Type to filter expiry dates..." />
+  <label for="expirySelect">Select Expiry:</label>
+  <select id="expirySelect"></select>
+
+  <div class="filters">
+    <label>Min OI: <input type="number" id="minOI" value="0" /></label>
+    <label>Min IV: <input type="number" id="minIV" value="0" /></label>
+    <label>Min Volume: <input type="number" id="minVolume" value="0" /></label>
+  </div>
+
+  <p>Underlying Value: <span id="underlyingValue"></span></p>
+  <p id="loading">Loading data...</p>
+  <p id="lastUpdated"></p>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="calls" colspan="7">CALL OPTIONS</th>
+        <th id="strikeHeader" class="strike">Strike Price &#x25B2;&#x25BC;</th>
+        <th class="puts" colspan="7">PUT OPTIONS</th>
+      </tr>
+      <tr>
+        <th class="calls">LTP</th>
+        <th class="calls">OI</th>
+        <th class="calls">OI Chg %</th>
+        <th class="calls">OI (Lakh)</th>
+        <th class="calls">Volume</th>
+        <th class="calls">IV</th>
+        <th class="calls">COI</th>
+        <th class="strike"></th>
+        <th class="puts">LTP</th>
+        <th class="puts">OI</th>
+        <th class="puts">OI Chg %</th>
+        <th class="puts">OI (Lakh)</th>
+        <th class="puts">Volume</th>
+        <th class="puts">IV</th>
+        <th class="puts">COI</th>
+      </tr>
+    </thead>
+    <tbody id="optionBody"></tbody>
+  </table>
+
+  <script>
+    const expirySelect = document.getElementById('expirySelect');
+    const expirySearch = document.getElementById('expirySearch');
+    const optionBody = document.getElementById('optionBody');
+    const underlyingValue = document.getElementById('underlyingValue');
+    const loading = document.getElementById('loading');
+    const lastUpdated = document.getElementById('lastUpdated');
+
+    const minOIInput = document.getElementById('minOI');
+    const minIVInput = document.getElementById('minIV');
+    const minVolumeInput = document.getElementById('minVolume');
+
+    let currentSortAsc = true;
+
+    expirySearch.addEventListener('input', () => {
+      const query = expirySearch.value.toLowerCase();
+      [...expirySelect.options].forEach(opt => {
+        opt.style.display = opt.value.toLowerCase().includes(query) ? '' : 'none';
+      });
+    });
+
+    async function loadExpiries() {
+      const data = await fetch(`/data/`).then(res => res.json());
+      expirySelect.innerHTML = '';
+      data.expiry && expirySelect.append(new Option(data.expiry, data.expiry));
+      data.calls && fetchAndRender(data.expiry);
+    }
+
+    async function fetchAndRender(expiry) {
+      loading.style.display = 'inline';
+      try {
+        const res = await fetch(`/data/?expiry=${expiry}`);
+        const data = await res.json();
+
+        underlyingValue.textContent = data.underlying.toFixed(2);
+        optionBody.innerHTML = '';
+
+        const minOI = +minOIInput.value;
+        const minIV = +minIVInput.value;
+        const minVol = +minVolumeInput.value;
+
+        data.calls.forEach((call, i) => {
+          const put = data.puts[i] || {};
+          const strike = call.strikePrice || put.strikePrice || '-';
+
+          const cOI = +call.openInterest, cIV = +call.impliedVolatility, cVol = +call.totalTradedVolume;
+          const pOI = +put.openInterest, pIV = +put.impliedVolatility, pVol = +put.totalTradedVolume;
+
+          const passCall = cOI >= minOI && cIV >= minIV && cVol >= minVol;
+          const passPut = pOI >= minOI && pIV >= minIV && pVol >= minVol;
+
+          if (!passCall && !passPut) return;
+
+          const callOIChg = +call.oiChangePercent;
+          const putOIChg = +put.oiChangePercent;
+
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td class="calls">${call.lastPrice || '-'}</td>
+            <td class="calls">${cOI || '-'}</td>
+            <td class="calls ${callOIChg > 0 ? 'arrow-up' : callOIChg < 0 ? 'arrow-down' : ''}">${isNaN(callOIChg) ? '-' : callOIChg.toFixed(2)}</td>
+            <td class="calls">${(cOI / 100000).toFixed(2)}</td>
+            <td class="calls">${cVol || '-'}</td>
+            <td class="calls">${cIV || '-'}</td>
+            <td class="calls">${call.changeinOpenInterest}</td>
+            <td class="strike">${strike}</td>
+            <td class="puts">${put.lastPrice || '-'}</td>
+            <td class="puts">${pOI || '-'}</td>
+            <td class="puts ${putOIChg > 0 ? 'arrow-up' : putOIChg < 0 ? 'arrow-down' : ''}">${isNaN(putOIChg) ? '-' : putOIChg.toFixed(2)}</td>
+            <td class="puts">${(pOI / 100000).toFixed(2)}</td>
+            <td class="puts">${pVol || '-'}</td>
+            <td class="puts">${pIV || '-'}</td>
+            <td class="puts">${put.changeinOpenInterest}</td>
+          `;
+          optionBody.appendChild(row);
+        });
+
+        lastUpdated.textContent = `Last updated: ${new Date().toLocaleString()}`;
+      } catch (err) {
+        console.error(err);
+        optionBody.innerHTML = `<tr><td colspan="15">Error fetching data.</td></tr>`;
+      }
+      loading.style.display = 'none';
+    }
+
+    expirySelect.addEventListener('change', () => fetchAndRender(expirySelect.value));
+    document.querySelectorAll('#minOI, #minIV, #minVolume').forEach(input => {
+      input.addEventListener('change', () => fetchAndRender(expirySelect.value));
+    });
+
+    document.getElementById('strikeHeader').addEventListener('click', () => {
+      const rows = Array.from(optionBody.querySelectorAll('tr'));
+      rows.sort((a, b) => {
+        const aStrike = parseFloat(a.cells[7].textContent) || 0;
+        const bStrike = parseFloat(b.cells[7].textContent) || 0;
+        return currentSortAsc ? aStrike - bStrike : bStrike - aStrike;
+      });
+      currentSortAsc = !currentSortAsc;
+      rows.forEach(row => optionBody.appendChild(row));
+    });
+
+    // Load expiries and data on page load
+    window.addEventListener('load', loadExpiries);
+
+    // Auto-refresh every 3 minutes
+    setInterval(() => fetchAndRender(expirySelect.value), 180000);
+  </script>
+</body>
+</html>
